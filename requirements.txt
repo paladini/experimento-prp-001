@@ -1,0 +1,4 @@
+pyowm
+gspread
+oauth2client
+PyOpenSSL
