@@ -3,6 +3,8 @@ import pyowm
 import gspread
 import time
 import json
+from datetime import datetime
+from dateutil import tz
 from oauth2client.service_account import ServiceAccountCredentials
 
 with open('credentials.json') as credentials:
@@ -10,34 +12,31 @@ with open('credentials.json') as credentials:
 
 spreadsheet_key = data["spreadsheet_key"]
 owm_key = data["owm_key"]
-date_column = 'A' # date column
-humidity_column = 'B' # humidity column
-cur_temp_column = 'C' # current temperature column
-min_temp_column = 'D' # minimum temperature column
-max_temp_column = 'E' # maximum temperature column
-start_row = '2' # the first row with values
-end_row = '85' # the last row with values
+date_column = 1 # date column
+humidity_column = 2 # humidity column
+cur_temp_column = 3 # current temperature column
+min_temp_column = 4 # minimum temperature column
+max_temp_column = 5 # maximum temperature column
+measured_time_column = 6 # time in which the date was measured
 current_date = time.strftime('%d/%m/%Y')
 
 def compare_dates(date_ws):
-    print("Current date: " + current_date + " | Worksheet date: " + date_ws)
+    '''
+        Checks if the empty line found is today. Additional step to prevent damages to the table.
+    '''
     if (date_ws == current_date):
         print("Current date and worksheet date are correct.")
         return True
     else:
-        print("Dates are not equal, an error will be thrown.")
         return False
 
-def check_empty_cell(worksheet, empty_row):
-    ct = worksheet.acell(cur_temp_column+str(empty_row)).value
-    mint = worksheet.acell(min_temp_column+str(empty_row)).value
-    maxt = worksheet.acell(max_temp_column+str(empty_row)).value
-    ctemp = (ct == '') or (ct == None)
-    mintemp = (mint == '') or (mint == None)
-    maxtemp = (maxt == '') or (maxt == None)
-
-    if (ctemp and mintemp and maxtemp):
-        print('Cells are empty and ready to be inserted.')
+def check_empty_cells(line):
+    '''
+        Checks if the worksheet has empty cells at the given line.
+        Using Python resource to check if the string is None or '' using conditionals.
+    '''
+    if (not(line[humidity_column-1] or line[cur_temp_column-1] or line[min_temp_column-1] or line[max_temp_column-1] or line[measured_time_column-1])):
+        print('An empty line was found.')
         return True
     else:
         print('Cells not empty, no data will be written to the document.')
@@ -54,45 +53,34 @@ humidity = w.get_humidity()
 cur_temp = w.get_temperature('celsius')['temp']
 min_temp = w.get_temperature('celsius')['temp_min']
 max_temp = w.get_temperature('celsius')['temp_max']
+time_utc = datetime.utcfromtimestamp(int(observation.get_reception_time())).replace(tzinfo=tz.tzutc())
+measured_time = time_utc.astimezone(tz.tzlocal()).strftime("%H:%M:%S")
 
 # Log-in into Google Spreadsheets
 scope = ['https://spreadsheets.google.com/feeds']
-credentials = ServiceAccountCredentials.from_json_keyfile_name('experimento-prp-001-4984fbe9985e.json', scope)
+credentials = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
 gc = gspread.authorize(credentials)
 spread = gc.open_by_key(spreadsheet_key)
 
+# Opening all worksheets and operating over it locally (less API calls)
+ws = [spread.get_worksheet(0), spread.get_worksheet(1), spread.get_worksheet(2)]
+
 # Updating worksheets with new values
-for i in range(0, 3):
+for i, current_ws in enumerate(ws):
     print("\n-------------------------------------\n")
-    print("Start working on worksheet number %d" % i)
-    ws = spread.get_worksheet(i)
-
-    # Checking for the first empty row
-    print("Trying to find an empty row.")
-    cell_list = ws.range(humidity_column+start_row + ":" + humidity_column+end_row)
-    empty_row = -1
-    for i, cell in enumerate(cell_list):
-        if ((cell.value == None) or (cell.value == '')):
-            empty_row = i + int(start_row)
-            print("An empty row was found.")
+    print("Start working on worksheet number %d." % i)
+    print("Trying to find an empty row...")
+    for j, line in enumerate(current_ws.get_all_values()):
+        if (compare_dates(line[date_column-1]) and check_empty_cells(line)):
+            print("Worksheet being updated now...")
+            current_ws.update_cell(j+1, humidity_column, int(humidity))
+            current_ws.update_cell(j+1, cur_temp_column, cur_temp)
+            current_ws.update_cell(j+1, max_temp_column, max_temp)
+            current_ws.update_cell(j+1, min_temp_column, min_temp)
+            current_ws.update_cell(j+1, measured_time_column, measured_time)
+            print('Worksheet was updated.')
             break
+        else:
+            next
 
-    if (empty_row == -1):
-        print("An empty row was not found. Skipping to the next worksheet.")
-        next
-
-    # Conditional to certify wheter the data should or shouldn't be inserted.
-    if ((compare_dates(ws.acell(date_column+str(empty_row)).value)) and (check_empty_cell(ws, empty_row))):
-        print("Everything goes fine, worksheet being updated now.")
-        ws.update_acell(humidity_column+str(empty_row), humidity)
-        ws.update_acell(cur_temp_column+str(empty_row), cur_temp)
-        ws.update_acell(min_temp_column+str(empty_row), min_temp)
-        ws.update_acell(max_temp_column+str(empty_row), max_temp)
-        print('Worksheet was updated.')
-    else:
-        print("Something went wrong, worksheet was not updated.")
-
-print("\n=================================\n\tEnd of script\n=================================")
-
-
-
+print("\n=================================\n\tEnd of script\n=================================\n\n")
