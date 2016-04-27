@@ -1,86 +1,53 @@
-#/usr/bin/env python3
+#!/usr/bin/env python3
+
 import pyowm
-import gspread
-import time
-import json
+
 from datetime import datetime
-from dateutil import tz
+from gspread import authorize
+from json import load
+from os import path
 from oauth2client.service_account import ServiceAccountCredentials
 
-with open('credentials.json') as credentials:
-    data = json.load(credentials)
 
-spreadsheet_key = data["spreadsheet_key"]
-owm_key = data["owm_key"]
-date_column = 1 # date column
-humidity_column = 2 # humidity column
-cur_temp_column = 3 # current temperature column
-min_temp_column = 4 # minimum temperature column
-max_temp_column = 5 # maximum temperature column
-measured_time_column = 6 # time in which the date was measured
-current_date = time.strftime('%d/%m/%Y')
+def get_resources(api_key, wtr_code):
+    owm = pyowm.OWM(api_key).weather_at_id(wtr_code)
+    wtr = owm.get_weather()
 
-def compare_dates(date_ws):
-    '''
-        Checks if the empty line found is today. Additional step to prevent damages to the table.
-    '''
-    if (date_ws == current_date):
-        print("Current date and worksheet date are correct.")
-        return True
-    else:
-        return False
+    today = datetime.today()
+    cur_date = today.strftime("%d/%m/%Y")
+    cur_time = today.strftime("%H:%M:%S")
+    temps = wtr.get_temperature('celsius')
 
-def check_empty_cells(line):
-    '''
-        Checks if the worksheet has empty cells at the given line.
-        Using Python resource to check if the string is None or '' using conditionals.
-    '''
-    if (not(line[humidity_column-1] or line[cur_temp_column-1] or line[min_temp_column-1] or line[max_temp_column-1] or line[measured_time_column-1])):
-        print('An empty line was found.')
-        return True
-    else:
-        print('Cells not empty, no data will be written to the document.')
-        return False
+    # order inherent to spreadsheet
+    return [
+        cur_date, wtr.get_humidity(), temps['temp'], temps['temp_min'],
+        temps['temp_max'], cur_time
+    ]
 
-# API call to OpenWeatherMap
-owm = pyowm.OWM(owm_key)
 
-# OpenWeatherMap - Pantanal [lat=-27.60985, lon=-48.516479]
-# http://openweathermap.org/city/7874482
-observation = owm.weather_at_id(7874478)
-w = observation.get_weather()
-humidity = w.get_humidity()
-cur_temp = w.get_temperature('celsius')['temp']
-min_temp = w.get_temperature('celsius')['temp_min']
-max_temp = w.get_temperature('celsius')['temp_max']
-time_utc = datetime.utcfromtimestamp(int(observation.get_reception_time())).replace(tzinfo=tz.tzutc())
-measured_time = time_utc.astimezone(tz.tzlocal()).strftime("%H:%M:%S")
+def upload_ss(values, keyfile, ss_key):
+    credentials = ServiceAccountCredentials.from_json_keyfile_name(
+        keyfile, ['https://spreadsheets.google.com/feeds'])
+    gc = authorize(credentials)
 
-# Log-in into Google Spreadsheets
-scope = ['https://spreadsheets.google.com/feeds']
-credentials = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
-gc = gspread.authorize(credentials)
-spread = gc.open_by_key(spreadsheet_key)
+    worksheet = gc.open_by_key(ss_key).sheet1
 
-# Opening all worksheets and operating over it locally (less API calls)
-ws = [spread.get_worksheet(0), spread.get_worksheet(1), spread.get_worksheet(2)]
+    last = worksheet.row_count + 1
+    worksheet.resize(last)
+    cell_list = worksheet.range('A{0}:F{0}'.format(last))
 
-# Updating worksheets with new values
-for i, current_ws in enumerate(ws):
-    print("\n-------------------------------------\n")
-    print("Start working on worksheet number %d." % i)
-    print("Trying to find an empty row...")
-    for j, line in enumerate(current_ws.get_all_values()):
-        if (compare_dates(line[date_column-1]) and check_empty_cells(line)):
-            print("Worksheet being updated now...")
-            current_ws.update_cell(j+1, humidity_column, int(humidity))
-            current_ws.update_cell(j+1, cur_temp_column, cur_temp)
-            current_ws.update_cell(j+1, max_temp_column, max_temp)
-            current_ws.update_cell(j+1, min_temp_column, min_temp)
-            current_ws.update_cell(j+1, measured_time_column, measured_time)
-            print('Worksheet was updated.')
-            break
-        else:
-            next
+    for cell, value in zip(cell_list, values):
+        cell.value = value
+    worksheet.update_cells(cell_list)
 
-print("\n=================================\n\tEnd of script\n=================================\n\n")
+
+if __name__ == '__main__':
+
+    private_data = load(open(path.join(path.dirname(__file__), 'config.json')))
+
+    api_key = private_data['owm_api_key']
+    ss_key = private_data['spreadsheet_key']
+    keyfile = path.join(path.dirname(__file__),
+                        private_data['json_keyfile_path'])
+
+    upload_ss(get_resources(api_key, 7874478), keyfile, ss_key)
