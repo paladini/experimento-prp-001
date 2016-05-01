@@ -18,7 +18,7 @@ def get_resources(api_key, wtr_code):
     cur_time = today.strftime("%H:%M:%S")
     temps = wtr.get_temperature('celsius')
 
-    # order inherent to spreadsheet
+    # order inherent to spreadsheet; pay attention to the temperature decimals
     return [
         cur_date, wtr.get_humidity(), temps['temp'], temps['temp_min'],
         temps['temp_max'], cur_time
@@ -29,16 +29,17 @@ def upload_ss(values, keyfile, ss_key):
     credentials = ServiceAccountCredentials.from_json_keyfile_name(
         keyfile, ['https://spreadsheets.google.com/feeds'])
     gc = authorize(credentials)
+    sheet = gc.open_by_key(ss_key)
 
-    worksheet = gc.open_by_key(ss_key).sheet1
+    for i in range(3):
+        worksheet = sheet.get_worksheet(i)
+        last = worksheet.row_count + 1
+        worksheet.resize(last)
+        cell_list = worksheet.range('A{0}:F{0}'.format(last))
 
-    last = worksheet.row_count + 1
-    worksheet.resize(last)
-    cell_list = worksheet.range('A{0}:F{0}'.format(last))
-
-    for cell, value in zip(cell_list, values):
-        cell.value = value
-    worksheet.update_cells(cell_list)
+        for cell, value in zip(cell_list, values):
+            cell.value = value
+        worksheet.update_cells(cell_list)
 
 
 if __name__ == '__main__':
