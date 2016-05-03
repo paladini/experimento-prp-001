@@ -1,5 +1,3 @@
 pyowm
 gspread
 oauth2client
-PyOpenSSL
-python-dateutil
